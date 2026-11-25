@@ -114,9 +114,70 @@
         count++;
       }
       status("Archivio online sincronizzato. Nuove foto inviate: " + count + ".");
+      try { await cleanup(); } catch(e) {status("Foto inviate; controllo spazio non riuscito: " + e.message); }
     } catch (e) { status("Invio sospeso: " + e.message + ". Le foto restano sull'iPad."); }
     finally { busy = false; }
   }
+
+  // Quota guard for this private bucket. Storage Free quota is shared across the organization;
+  // this is a BirdCam safety threshold, not an authoritative organization usage meter.
+  const quotaBytes = 1024 * 1024 * 1024;
+  let lastCleanup = 0;
+  async function allOnline() {
+    const token = await ensureToken(), files = [];
+    let offset = 0;
+    while (true) {
+      const r = await request("/storage/v1/object/list/" + bucket, {
+        method: "POST", headers: headers(token, true),
+        body: JSON.stringify({prefix: session.user.id, limit: 100, offset, sortBy: {column: "created_at", order: "asc"}})
+      });
+      const page = await r.json();
+      files.push(...page.filter(f => f.name && f.name.endsWith(".jpg")));
+      if (page.length < 100) break;
+      offset += 100;
+      if (offset > 10000) throw Error("Troppi file da verificare: pulizia sospesa.");
+    }
+    return files.map(f => ({...f, path: session.user.id + "/" + f.name, bytes: Number(f.metadata?.size || 0)}));
+  }
+  async function favourites() {
+    const token = await ensureToken();
+    const r = await request("/rest/v1/birdcam_favorites?select=object_name&user_id=eq." + session.user.id, {headers: headers(token)});
+    return new Set((await r.json()).map(x => x.object_name));
+  }
+  async function setFavourite(path, enabled) {
+    const token = await ensureToken();
+    if (enabled) {
+      await request("/rest/v1/birdcam_favorites", {
+        method: "POST", headers: {...headers(token, true), Prefer: "resolution=merge-duplicates"},
+        body: JSON.stringify({user_id: session.user.id, object_name: path})
+      });
+    } else {
+      await request("/rest/v1/birdcam_favorites?user_id=eq." + session.user.id + "&object_name=eq." + encodeURIComponent(path),
+        {method: "DELETE", headers: headers(token)});
+    }
+  }
+  async function cleanup() {
+    if (!session || Date.now() - lastCleanup < 300000) return;
+    lastCleanup = Date.now();
+    const photos = await allOnline();
+    if (photos.some(p => !p.bytes)) {status("Pulizia sospesa: dimensioni file mancanti."); return;}
+    let bytesUsed = photos.reduce((sum, p) => sum + p.bytes, 0);
+    if (bytesUsed < quotaBytes * .80) return;
+    const keep = await favourites();
+    const candidates = photos.filter(p => !keep.has(p.path)).sort((a,b) => new Date(a.created_at) - new Date(b.created_at));
+    const token = await ensureToken();
+    let removed = 0;
+    for (const photo of candidates) {
+      if (bytesUsed <= quotaBytes * .70) break;
+      await request("/storage/v1/object/" + bucket, {
+        method: "DELETE", headers: headers(token, true), body: JSON.stringify({prefixes: [photo.path]})
+      });
+      bytesUsed -= photo.bytes;
+      removed++;
+    }
+    status("Pulizia cloud: " + removed + " foto vecchie eliminate. Le preferite sono protette." + (bytesUsed > quotaBytes*.70 ? " Spazio ancora alto: controlla i preferiti." : ""));
+  }
+
   async function gallery() {
     if (!enabled || !session) return;
     try {
@@ -127,6 +188,7 @@
         body: JSON.stringify({ prefix, limit: 100, offset: 0, sortBy: { column: "created_at", order: "desc" } })
       });
       const photos = (await r.json()).filter(x => x.name && x.name.endsWith(".jpg"));
+      const fav = await favourites();
       el("cloudGallery").replaceChildren();
       for (const p of photos) {
         const path = prefix + "/" + p.name;
@@ -139,7 +201,17 @@
         a.target = "_blank"; a.rel = "noopener noreferrer";
         const img = document.createElement("img");
         img.className = "thumb"; img.loading = "lazy"; img.src = a.href; img.alt = p.name;
-        a.appendChild(img); el("cloudGallery").appendChild(a);
+        a.appendChild(img);
+        const tile = document.createElement("div");
+        tile.appendChild(a);
+        const favourite = document.createElement("button");
+        favourite.textContent = fav.has(path) ? "★ Preferita" : "☆ Preferita";
+        favourite.addEventListener("click", async () => {
+          try {await setFavourite(path, !fav.has(path)); await gallery();}
+          catch(e) {status("Preferito non aggiornato: " + e.message);}
+        });
+        tile.appendChild(favourite);
+        el("cloudGallery").appendChild(tile);
       }
       status("Fotografie online: " + photos.length + " (ultime 100).");
     } catch (e) { status("Impossibile leggere la galleria: " + e.message); }
