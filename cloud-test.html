@@ -5,6 +5,7 @@
 <body><main><h2>🐦 BirdCam · Test cloud dal Pixel</h2><p class="muted">Pagina separata dalla fototrappola dell'iPad. Usa la fotocamera o scegli un JPEG. Non cambia l'app in funzione.</p>
 <section id="auth"><h3>Accesso privato</h3><input id="email" type="email" autocomplete="email" placeholder="Email"><input id="password" type="password" autocomplete="current-password" placeholder="Password"><button id="login">Accedi</button> <button id="signup">Crea account</button> <button id="logout" hidden>Esci</button><p class="muted">La registrazione può richiedere conferma via email.</p></section>
 <section id="cloud" hidden><h3>Prova invio fotografia</h3><input id="photo" type="file" accept="image/jpeg,image/*" capture="environment"><p><button id="upload">Invia fotografia di prova</button> <button id="refresh">Aggiorna galleria</button></p><p id="usage" class="muted"></p><p class="muted">Pulizia: al raggiungimento dell'80% della quota di riferimento (1 GiB), elimina le foto cloud più vecchie non preferite fino al 70%. La pulizia viene controllata dopo gli invii da questa pagina. Le foto locali non vengono toccate.</p><div class="grid" id="gallery"></div></section>
+<section><h3>Simulazione pulizia (senza cancellare foto reali)</h3><p class="muted">Scenario fittizio: 850 MiB occupati su 1 GiB, una foto preferita. Premi per verificare l'ordine di eliminazione e la soglia del 70%. Non viene effettuata alcuna richiesta di cancellazione.</p><button id="simulate">Simula pulizia 80% → 70%</button><div id="simulation" class="status" aria-live="polite"></div></section>
 <section><div class="status" id="status" role="status">Accedi per iniziare il test.</div></section></main>
 <script>
 (()=>{'use strict';
@@ -39,6 +40,25 @@ box.append(img,info,b);root.append(box)}
 }catch(e){say('Galleria: '+e.message)}}
 async function upload(){try{const file=el('photo').files[0];if(!file)throw Error('Prima scegli o scatta una foto');if(file.size>20*1048576)throw Error('Foto oltre 20 MiB');const t=await token(),path=session.user.id+'/pixel_'+Date.now()+'_'+Math.random().toString(36).slice(2)+'.jpg';
 say('Caricamento in corso...');await call('/storage/v1/object/'+bucket+'/'+path,{method:'POST',headers:{...head(t),'Content-Type':file.type||'image/jpeg','x-upsert':'false'},body:file});say('Foto inviata al cloud. Controllo spazio...');await cleanup();await gallery();say('Foto caricata e galleria aggiornata. La pulizia viene eseguita solo se si supera l’80%.')}catch(e){say('Invio: '+e.message)}}
+function simulateCleanup(){
+ const MiB=1048576;
+ const samples=[
+ {name:'Foto A · più vecchia',size:100*MiB,time:1,favorite:false},
+ {name:'Foto B · preferita',size:150*MiB,time:2,favorite:true},
+ {name:'Foto C · intermedia',size:120*MiB,time:3,favorite:false},
+ {name:'Foto D · più recente',size:480*MiB,time:4,favorite:false}];
+ let used=samples.reduce((sum,x)=>sum+x.size,0);
+ const before=used/MiB,removed=[];
+ if(used>=quota*.8){
+ for(const file of [...samples].filter(x=>!x.favorite).sort((a,b)=>a.time-b.time)){
+ if(used<=quota*.7)break;
+ removed.push(file);used-=file.size;
+ }}
+ const retained=samples.filter(x=>!removed.includes(x));
+ const ok=before*MiB>=quota*.8 && used<=quota*.7 && retained.some(x=>x.favorite) && removed.every(x=>!x.favorite);
+ el('simulation').textContent=(ok?'TEST SUPERATO':'TEST NON SUPERATO')+'\\nSpazio iniziale: '+before+' MiB.\\nEliminate in ordine: '+removed.map(x=>x.name).join(', ')+'.\\nConservate: '+retained.map(x=>x.name).join(', ')+'.\\nSpazio finale: '+(used/MiB)+' MiB.\\nNessuna foto reale cancellata.';
+}
+el('simulate').onclick=simulateCleanup;
 el('login').onclick=()=>auth(false);el('signup').onclick=()=>auth(true);el('upload').onclick=upload;el('refresh').onclick=gallery;el('logout').onclick=()=>{session=null;el('cloud').hidden=true;el('logout').hidden=true;el('login').hidden=el('signup').hidden=false;el('gallery').replaceChildren();say('Disconnesso')};
 })();
 </script></body></html>
