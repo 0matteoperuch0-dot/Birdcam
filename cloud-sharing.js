@@ -1,7 +1,7 @@
 (function () {
   "use strict";
   const settings = window.BIRDCAM_CLOUD || {};
-  const base = (settings.url || "").replace(/\\/$/, "");
+  const base = (settings.url || "").replace(new RegExp("/$"), "");
   const key = settings.publishableKey || "";
   const enabled = /^https:\/\/.+\.supabase\.co$/.test(base) && !!key;
   const bucket = "birdcam-photos";
