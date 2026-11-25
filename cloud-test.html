@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BirdCam · Test cloud Pixel</title>
+<style>body{font:16px system-ui;background:#0b1e17;color:#e9f3ea;margin:0;padding:16px}main{max-width:700px;margin:auto}section{background:#183226;padding:16px;border-radius:12px;margin:14px 0}button,input{font:inherit;padding:11px;border-radius:8px;margin:4px 0}button{background:#b4e9ad;color:#10261a;border:0}input{max-width:95%}input[type=email],input[type=password]{display:block;width:95%}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.tile{background:#0a2419;padding:7px;border-radius:8px}.tile img{width:100%;aspect-ratio:4/3;object-fit:cover}.tile button{font-size:13px;padding:8px}.muted{color:#c2d1c6;font-size:14px}.status{white-space:pre-wrap;overflow-wrap:anywhere}</style></head>
+<body><main><h2>🐦 BirdCam · Test cloud dal Pixel</h2><p class="muted">Pagina separata dalla fototrappola dell'iPad. Usa la fotocamera o scegli un JPEG. Non cambia l'app in funzione.</p>
+<section id="auth"><h3>Accesso privato</h3><input id="email" type="email" autocomplete="email" placeholder="Email"><input id="password" type="password" autocomplete="current-password" placeholder="Password"><button id="login">Accedi</button> <button id="signup">Crea account</button> <button id="logout" hidden>Esci</button><p class="muted">La registrazione può richiedere conferma via email.</p></section>
+<section id="cloud" hidden><h3>Prova invio fotografia</h3><input id="photo" type="file" accept="image/jpeg,image/*" capture="environment"><p><button id="upload">Invia fotografia di prova</button> <button id="refresh">Aggiorna galleria</button></p><p id="usage" class="muted"></p><p class="muted">Pulizia: al raggiungimento dell'80% della quota di riferimento (1 GiB), elimina le foto cloud più vecchie non preferite fino al 70%. La pulizia viene controllata dopo gli invii da questa pagina. Le foto locali non vengono toccate.</p><div class="grid" id="gallery"></div></section>
+<section><div class="status" id="status" role="status">Accedi per iniziare il test.</div></section></main>
+<script>
+(()=>{'use strict';
+const base='https://dsvcawulshkzlalpkbnf.supabase.co',key='sb_publishable_p7cYRIZCdOOTrf2KhkYH8g_cqYK-aIu',bucket='birdcam-photos',quota=1024*1024*1024;
+const el=id=>document.getElementById(id),say=s=>el('status').textContent=s;
+let session=null;
+function head(token,json=false){const h={apikey:key,Authorization:'Bearer '+(token||key)};if(json)h['Content-Type']='application/json';return h}
+async function call(path,opts={}){const r=await fetch(base+path,opts);if(!r.ok){let message='HTTP '+r.status;try{const o=await r.json();message=o.msg||o.message||o.error_description||o.error||message}catch{}throw Error(message)}return r}
+async function token(){if(!session)throw Error('Effettua l’accesso');if(Date.now()<session.expires_at-60000)return session.access_token;
+const r=await call('/auth/v1/token?grant_type=refresh_token',{method:'POST',headers:head(null,true),body:JSON.stringify({refresh_token:session.refresh_token})});const d=await r.json();session={...d,expires_at:Date.now()+d.expires_in*1000};return session.access_token}
+async function auth(signup){try{const email=el('email').value.trim(),password=el('password').value;if(!email||!password)throw Error('Inserisci email e password');say('Connessione...');const path=signup?'/auth/v1/signup':'/auth/v1/token?grant_type=password';
+const r=await call(path,{method:'POST',headers:head(null,true),body:JSON.stringify({email,password})});const d=await r.json();
+if(!d.access_token){say('Account creato: conferma la mail e poi premi Accedi.');return}
+session={...d,expires_at:Date.now()+d.expires_in*1000};el('cloud').hidden=false;el('logout').hidden=false;el('login').hidden=el('signup').hidden=true;say('Accesso riuscito. Puoi scattare una foto col Pixel.');await gallery()}catch(e){say('Accesso: '+e.message)}}
+async function list(){const t=await token(),all=[];let offset=0;while(true){const r=await call('/storage/v1/object/list/'+bucket,{method:'POST',headers:head(t,true),body:JSON.stringify({prefix:session.user.id,limit:100,offset,sortBy:{column:'created_at',order:'asc'}})});const a=await r.json();all.push(...a.filter(x=>x.name&&x.name.endsWith('.jpg')));if(a.length<100)break;offset+=100;if(offset>10000)throw Error('Troppe foto: pulizia sospesa per sicurezza')}
+return all.map(x=>({...x,path:session.user.id+'/'+x.name,size:Number(x.metadata?.size||0)}))}
+async function favourites(){const t=await token();const r=await call('/rest/v1/birdcam_favorites?select=object_name&user_id=eq.'+encodeURIComponent(session.user.id),{headers:head(t)});return new Set((await r.json()).map(x=>x.object_name))}
+async function favorite(path,on){const t=await token();if(on){await call('/rest/v1/birdcam_favorites',{method:'POST',headers:{...head(t,true),Prefer:'resolution=merge-duplicates'},body:JSON.stringify({user_id:session.user.id,object_name:path})})}else{await call('/rest/v1/birdcam_favorites?user_id=eq.'+session.user.id+'&object_name=eq.'+encodeURIComponent(path),{method:'DELETE',headers:head(t)})}}
+async function cleanup(){const photos=await list();let used=photos.reduce((s,p)=>s+p.size,0);if(photos.some(x=>!x.size))return say('Pulizia sospesa: dimensione di alcune foto sconosciuta.');
+if(used<quota*.8)return;
+const fav=await favourites(),candidates=photos.filter(x=>!fav.has(x.path)).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
+let removed=0;const t=await token();
+for(const p of candidates){if(used<=quota*.7)break;await call('/storage/v1/object/'+bucket,{method:'DELETE',headers:head(t,true),body:JSON.stringify({prefixes:[p.path]})});used-=p.size;removed++}
+say('Pulizia cloud: '+removed+' foto vecchie eliminate. Preferiti conservati.'+(used>quota*.7?' Spazio ancora alto: restano solo preferiti o file non eliminabili.':''))}
+async function gallery(){try{const photos=await list(),fav=await favourites();const used=photos.reduce((s,p)=>s+p.size,0);el('usage').textContent=photos.length+' fotografie · '+(used/1048576).toFixed(1)+' MiB nel tuo archivio BirdCam (non include gli altri progetti dell’organizzazione).';
+const root=el('gallery');root.replaceChildren();for(const p of photos.slice(-30).reverse()){
+const t=await token(),r=await call('/storage/v1/object/sign/'+bucket+'/'+encodeURIComponent(p.path).replace(/%2F/g,'/'),{method:'POST',headers:head(t,true),body:JSON.stringify({expiresIn:600})});
+const j=await r.json();const url=base+'/storage/v1'+j.signedURL;const box=document.createElement('div');box.className='tile';const img=document.createElement('img');img.src=url;img.alt='Foto caricata';
+const info=document.createElement('div');info.className='muted';info.textContent=new Date(p.created_at).toLocaleString('it-IT')+' · '+(p.size/1048576).toFixed(1)+' MiB';
+const b=document.createElement('button');b.textContent=fav.has(p.path)?'★ Preferita':'☆ Preferita';b.onclick=async()=>{try{await favorite(p.path,!fav.has(p.path));say('Preferito aggiornato');await gallery()}catch(e){say(e.message)}};
+box.append(img,info,b);root.append(box)}
+}catch(e){say('Galleria: '+e.message)}}
+async function upload(){try{const file=el('photo').files[0];if(!file)throw Error('Prima scegli o scatta una foto');if(file.size>20*1048576)throw Error('Foto oltre 20 MiB');const t=await token(),path=session.user.id+'/pixel_'+Date.now()+'_'+Math.random().toString(36).slice(2)+'.jpg';
+say('Caricamento in corso...');await call('/storage/v1/object/'+bucket+'/'+path,{method:'POST',headers:{...head(t),'Content-Type':file.type||'image/jpeg','x-upsert':'false'},body:file});say('Foto inviata al cloud. Controllo spazio...');await cleanup();await gallery();say('Foto caricata e galleria aggiornata. La pulizia viene eseguita solo se si supera l’80%.')}catch(e){say('Invio: '+e.message)}}
+el('login').onclick=()=>auth(false);el('signup').onclick=()=>auth(true);el('upload').onclick=upload;el('refresh').onclick=gallery;el('logout').onclick=()=>{session=null;el('cloud').hidden=true;el('logout').hidden=true;el('login').hidden=el('signup').hidden=false;el('gallery').replaceChildren();say('Disconnesso')};
+})();
+</script></body></html>
