@@ -1,7 +1,6 @@
-// BirdCam cloud settings. Only PUBLIC Supabase settings belong here.
-// Create a dedicated Supabase project and private bucket 'birdcam-photos' first.
-// NEVER put service_role or sb_secret_* values in browser code.
+// BirdCam development branch: public client configuration only.
+// This key is publishable (not a service_role/secret); access is enforced by Storage RLS.
 window.BIRDCAM_CLOUD = {
-  url: "",
-  publishableKey: ""
+  url: "https://dsvcawulshkzlalpkbnf.supabase.co",
+  publishableKey: "sb_publishable_p7cYRIZCdOOTrf2KhkYH8g_cqYK-aIu"
 };
