@@ -19,7 +19,7 @@ const r=await call('/auth/v1/token?grant_type=refresh_token',{method:'POST',head
 async function auth(signup){try{const email=el('email').value.trim(),password=el('password').value;if(!email||!password)throw Error('Inserisci email e password');say('Connessione...');const path=signup?('/auth/v1/signup?redirect_to='+encodeURIComponent(location.origin+'/Birdcam/cloud-test.html')):'/auth/v1/token?grant_type=password';
 const r=await call(path,{method:'POST',headers:head(null,true),body:JSON.stringify({email,password})});const d=await r.json();
 if(!d.access_token){say('Account creato: conferma la mail e poi premi Accedi.');return}
-session={...d,expires_at:Date.now()+d.expires_in*1000};el('cloud').hidden=false;el('logout').hidden=false;el('login').hidden=el('signup').hidden=true;say('Accesso riuscito. Puoi scattare una foto col Pixel.');await gallery()}catch(e){say('Accesso: '+e.message)}}
+session={...d,expires_at:Date.now()+d.expires_in*1000};if(window.BirdCamPush)window.BirdCamPush.setAuth(async()=>({token:await token(),userId:session.user.id}));el('cloud').hidden=false;el('logout').hidden=false;el('login').hidden=el('signup').hidden=true;say('Accesso riuscito. Puoi scattare una foto col Pixel.');await gallery()}catch(e){say('Accesso: '+e.message)}}
 async function list(){const t=await token(),all=[];let offset=0;while(true){const r=await call('/storage/v1/object/list/'+bucket,{method:'POST',headers:head(t,true),body:JSON.stringify({prefix:session.user.id,limit:100,offset,sortBy:{column:'created_at',order:'asc'}})});const a=await r.json();all.push(...a.filter(x=>x.name&&x.name.endsWith('.jpg')));if(a.length<100)break;offset+=100;if(offset>10000)throw Error('Troppe foto: pulizia sospesa per sicurezza')}
 return all.map(x=>({...x,path:session.user.id+'/'+x.name,size:Number(x.metadata?.size||0)}))}
 async function favourites(){const t=await token();const r=await call('/rest/v1/birdcam_favorites?select=object_name&user_id=eq.'+encodeURIComponent(session.user.id),{headers:head(t)});return new Set((await r.json()).map(x=>x.object_name))}
@@ -111,6 +111,6 @@ async function inspectRecovery(){
 }
 inspectRecovery();
 el('forgot').onclick=forgotPassword;el('verifyCode').onclick=verifyRecoveryCode;el('savePassword').onclick=resetPassword;
-el('login').onclick=()=>auth(false);el('signup').onclick=()=>auth(true);el('upload').onclick=upload;el('refresh').onclick=gallery;el('logout').onclick=()=>{session=null;el('cloud').hidden=true;el('logout').hidden=true;el('login').hidden=el('signup').hidden=false;el('gallery').replaceChildren();say('Disconnesso')};
+el('login').onclick=()=>auth(false);el('signup').onclick=()=>auth(true);el('upload').onclick=upload;el('refresh').onclick=gallery;el('logout').onclick=()=>{session=null;if(window.BirdCamPush)window.BirdCamPush.setAuth(null);el('cloud').hidden=true;el('logout').hidden=true;el('login').hidden=el('signup').hidden=false;el('gallery').replaceChildren();say('Disconnesso')};
 })();
-</script></body></html>
+</script><script src="birdcam-push.js?v=1"></script></body></html>
