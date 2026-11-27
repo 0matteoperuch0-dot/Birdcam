@@ -14,12 +14,13 @@
   const root = document.createElement("section");
   root.className = "panel";
   root.style.marginTop = "16px";
-  root.innerHTML = '<h2>☁️ Condivisione remota (beta)</h2><p class="help">Test: le foto locali non vengono cancellate; nuovi JPEG copiati nel cloud ogni 15 secondi quando Safari è attivo. Pulizia automatica e notifiche push non ancora attive.</p><div id="cloudAuth"><input id="cloudEmail" type="email" placeholder="Email" style="width:100%;margin-bottom:8px;padding:10px"><input id="cloudPassword" type="password" placeholder="Password" style="width:100%;margin-bottom:8px;padding:10px"><label id="cloudRememberLabel" style="display:flex;gap:8px;align-items:center;margin:8px 0 12px"><input type="checkbox" id="cloudRemember" style="width:18px;height:18px"> Rimani collegato su questo dispositivo</label><div class="actions"><button id="cloudLogin">Accedi</button><button id="cloudSignup">Crea account</button><button id="cloudLogout" style="display:none">Esci</button><button id="cloudSync">Invia foto in attesa</button></div></div><p id="cloudStatus" class="help" role="status"></p><div class="gallery" id="cloudGallery"></div><div class="actions"><button id="cloudRefresh">Aggiorna galleria online</button></div>';
+  root.innerHTML = '<h2>☁️ Condivisione remota (beta)</h2><p class="help">Le foto locali non vengono eliminate. Copia cloud ogni 15 secondi, oppure subito dopo uno scatto. Le notifiche vengono richieste dopo l'invio; pulizia cloud disattivata.</p><div id="cloudAuth"><input id="cloudEmail" type="email" placeholder="Email" style="width:100%;margin-bottom:8px;padding:10px"><input id="cloudPassword" type="password" placeholder="Password" style="width:100%;margin-bottom:8px;padding:10px"><label id="cloudRememberLabel" style="display:flex;gap:8px;align-items:center;margin:8px 0 12px"><input type="checkbox" id="cloudRemember" style="width:18px;height:18px"> Rimani collegato su questo dispositivo</label><div class="actions"><button id="cloudLogin">Accedi</button><button id="cloudSignup">Crea account</button><button id="cloudLogout" style="display:none">Esci</button><button id="cloudSync">Invia foto in attesa</button></div></div><p id="cloudStatus" class="help" role="status"></p><p id="cloudLinkState" class="help" role="status">Collegamento cloud da verificare</p><button id="cloudCheck" type="button">Verifica sincronizzazione</button><div class="gallery" id="cloudGallery"></div><div class="actions"><button id="cloudRefresh">Aggiorna galleria online</button></div>';
   const main = document.querySelector("main.wrap");
   const footer = main.querySelector(".footer");
   main.insertBefore(root, footer);
   const el = id => document.getElementById(id);
   const status = text => { el("cloudStatus").textContent = text };
+  const linkStatus = text => { el("cloudLinkState").textContent = text };
   function headers(token, json) {
     const h = { apikey: key, Authorization: "Bearer " + (token || key) };
     if (json) h["Content-Type"] = "application/json";
@@ -44,6 +45,7 @@
     el("cloudEmail").style.display = s ? "none" : "";
     el("cloudPassword").style.display = s ? "none" : "";
     el("cloudRememberLabel").style.display = s ? "none" : "";
+    linkStatus(s ? "☁️ Account collegato. In attesa di foto da inviare." : "⚠️ Account non collegato: le foto restano soltanto sull’iPad finché non accedi.");
   }
   async function ensureToken() {
     if (!session) throw Error("Accedi prima di sincronizzare.");
@@ -99,6 +101,21 @@
         tx.oncomplete = () => db.close();
       };
     });
+  }
+  async function checkLink() {
+    if (!enabled) return linkStatus("Cloud non configurato.");
+    if (!session) return linkStatus("⚠️ Accedi nella sezione Condivisione remota dell’iPad: al momento gli scatti restano soltanto locali.");
+    try {
+      const sent=saved();
+      const pending=await getCaptures(sent);
+      const token=await ensureToken();
+      const r=await request("/storage/v1/object/list/"+bucket,{
+        method:"POST",headers:headers(token,true),
+        body:JSON.stringify({prefix:session.user.id,limit:1,offset:0})
+      });
+      await r.json();
+      linkStatus("✅ Accesso cloud verificato. "+(pending.length?("Ci sono almeno "+pending.length+" foto in attesa di invio. Premi «Invia foto in attesa»."):"Nessuna foto locale in attesa di caricamento.")+" Safari deve restare aperto sull’iPad.");
+    }catch(e){linkStatus("⚠️ Collegamento cloud: "+e.message+". Le foto restano salvate sull’iPad.");}
   }
   function notifiedEvents() {
     try { return JSON.parse(localStorage.getItem("birdcam_push_notified_v1_" + session.user.id) || "{}"); }
@@ -171,9 +188,10 @@
         if (item.eventId) queueEvent(item.eventId);
       }
       status("Archivio online sincronizzato. Nuove foto inviate: " + count + ".");
+      linkStatus("✅ Cloud collegato. "+count+" foto nuove caricate; notifiche in elaborazione.");
       await flushPending(token);
       // La pulizia reale del cloud è disattivata nella versione beta per proteggere le foto.
-    } catch (e) { status("Invio sospeso: " + e.message + ". Le foto restano sull'iPad."); }
+    } catch (e) { status("Invio sospeso: " + e.message + ". Le foto restano sull'iPad."); linkStatus("⚠️ Foto non inviate: "+e.message+". Premi «Verifica sincronizzazione»."); }
     finally { busy = false; }
   }
 
@@ -278,6 +296,11 @@
   el("cloudSignup").addEventListener("click", () => login(true));
   el("cloudLogout").addEventListener("click", () => { updateSession(null); el("cloudGallery").replaceChildren(); status("Disconnesso."); });
   el("cloudSync").addEventListener("click", sync);
+  el("cloudCheck").addEventListener("click", checkLink);
+  window.addEventListener("birdcam-photo-saved", () => {
+    if (session) sync();
+    else linkStatus("⚠️ Foto salvata solo sull’iPad: effettua l'accesso in Condivisione remota.");
+  });
   el("cloudRefresh").addEventListener("click", gallery);
   if (!enabled) {
     status("Funzione in preparazione: Supabase dedicato non ancora configurato. Nessun dato viene trasmesso.");
@@ -290,7 +313,7 @@
       } else localStorage.removeItem(stateKey);
     } catch (_) { localStorage.removeItem(stateKey); }
     if (session) {
-      ensureToken().then(() => { sync(); gallery(); }).catch(() => {
+      ensureToken().then(() => { sync(); gallery(); checkLink(); }).catch(() => {
         updateSession(null);
         status("Sessione scaduta. Accedi nuovamente.");
       });
