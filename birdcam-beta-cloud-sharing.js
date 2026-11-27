@@ -103,6 +103,31 @@
     try { return JSON.parse(localStorage.getItem("birdcam_push_notified_v1_" + session.user.id) || "{}"); }
     catch (_) { return {}; }
   }
+  function pendingEvents() {
+    try { return JSON.parse(localStorage.getItem("birdcam_beta_push_queue_v1_" + session.user.id) || "{}"); }
+    catch (_) { return {}; }
+  }
+  function savePending(events) { localStorage.setItem("birdcam_beta_push_queue_v1_" + session.user.id, JSON.stringify(events)); }
+  function queueEvent(eventId) {
+    if (!eventId || notifiedEvents()[eventId]) return;
+    const pending = pendingEvents();
+    if (!pending[eventId]) pending[eventId] = Date.now();
+    savePending(pending);
+  }
+  async function flushPending(token) {
+    const pending = pendingEvents();
+    const ids = Object.keys(pending).sort((a,b)=>pending[a]-pending[b]).slice(0,10);
+    for (const id of ids) {
+      try {
+        await notifyEvent(id, token);
+        delete pending[id];
+        savePending(pending);
+      } catch(e) {
+        status("Foto al sicuro nel cloud; ritenterò l'avviso push: "+e.message);
+        break;
+      }
+    }
+  }
   async function notifyEvent(eventId, token) {
     if (!eventId) return;
     const notified = notifiedEvents();
@@ -142,12 +167,10 @@
         sent[marker] = true;
         localStorage.setItem(doneKey + "_" + session.user.id, JSON.stringify(sent));
         count++;
-        if (item.eventId) {
-          try { await notifyEvent(item.eventId, token); }
-          catch (e) { status("Foto caricata, ma notifica non inviata: "+e.message); }
-        }
+        if (item.eventId) queueEvent(item.eventId);
       }
       status("Archivio online sincronizzato. Nuove foto inviate: " + count + ".");
+      await flushPending(token);
       // La pulizia reale del cloud è disattivata nella versione beta per proteggere le foto.
     } catch (e) { status("Invio sospeso: " + e.message + ". Le foto restano sull'iPad."); }
     finally { busy = false; }
