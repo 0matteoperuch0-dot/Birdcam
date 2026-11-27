@@ -99,6 +99,29 @@
       };
     });
   }
+  function notifiedEvents() {
+    try { return JSON.parse(localStorage.getItem("birdcam_push_notified_v1_" + session.user.id) || "{}"); }
+    catch (_) { return {}; }
+  }
+  async function notifyEvent(eventId, token) {
+    if (!eventId) return;
+    const notified = notifiedEvents();
+    if (notified[eventId]) return;
+    const r = await request("/functions/v1/birdcam-push", {
+      method: "POST", headers: headers(token, true), body: JSON.stringify({kind:"capture"})
+    });
+    const result = await r.json();
+    // Accepted by the push endpoint (0 subscribers is valid until the Pixel opts in).
+    notified[eventId] = Date.now();
+    // Keep history bounded to avoid filling iPad localStorage.
+    const keys = Object.keys(notified);
+    if (keys.length > 500) {
+      keys.sort((a,b)=>notified[a]-notified[b]);
+      for (const key of keys.slice(0, keys.length-500)) delete notified[key];
+    }
+    localStorage.setItem("birdcam_push_notified_v1_" + session.user.id, JSON.stringify(notified));
+    if (result.failed) status("Foto online; "+result.failed+" invii push non riusciti.");
+  }
   async function sync() {
     if (!enabled || !session || busy || !navigator.onLine) return;
     busy = true;
@@ -119,6 +142,10 @@
         sent[marker] = true;
         localStorage.setItem(doneKey + "_" + session.user.id, JSON.stringify(sent));
         count++;
+        if (item.eventId) {
+          try { await notifyEvent(item.eventId, token); }
+          catch (e) { status("Foto caricata, ma notifica non inviata: "+e.message); }
+        }
       }
       status("Archivio online sincronizzato. Nuove foto inviate: " + count + ".");
       // La pulizia reale del cloud è disattivata nella versione beta per proteggere le foto.
