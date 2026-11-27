@@ -60,8 +60,55 @@ function simulateCleanup(){
 }
 el('simulate').onclick=simulateCleanup;
 async function forgotPassword(){try{const email=el('email').value.trim();if(!email)throw Error('Inserisci prima la tua email');const redirect=location.origin+location.pathname;const r=await call('/auth/v1/recover?redirect_to='+encodeURIComponent(redirect),{method:'POST',headers:head(null,true),body:JSON.stringify({email})});say('Se questo indirizzo è registrato, riceverai un messaggio per reimpostare la password. Controlla anche Spam.')}catch(e){say('Recupero password: '+e.message)}}
-async function resetPassword(){try{const newPassword=el('newPassword').value;if(newPassword.length<8)throw Error('Usa almeno 8 caratteri');const hash=new URLSearchParams(location.hash.slice(1));const access=hash.get('access_token');if(!access||hash.get('type')!=='recovery')throw Error('Apri prima il collegamento ricevuto via email');await call('/auth/v1/user',{method:'PUT',headers:head(access,true),body:JSON.stringify({password:newPassword})});el('resetPanel').hidden=true;el('newPassword').value='';history.replaceState(null,'',location.pathname);say('Password modificata. Accedi con la nuova password.')}catch(e){say('Nuova password: '+e.message)}}
-const urlHash=new URLSearchParams(location.hash.slice(1));if(urlHash.get('type')==='recovery'&&urlHash.get('access_token')){el('resetPanel').hidden=false;say('Recupero verificato. Scegli la nuova password.');}
+let recoveryAccess=null;
+async function resetPassword(){try{
+ const newPassword=el('newPassword').value;
+ if(newPassword.length<8)throw Error('Usa almeno 8 caratteri');
+ if(!recoveryAccess)throw Error('Il collegamento non contiene un accesso di recupero valido. Richiedi una nuova email.');
+ await call('/auth/v1/user',{method:'PUT',headers:head(recoveryAccess,true),body:JSON.stringify({password:newPassword})});
+ recoveryAccess=null;el('resetPanel').hidden=true;el('newPassword').value='';
+ history.replaceState(null,'',location.pathname);
+ showNormalLogin();
+ say('Password modificata correttamente. Ora puoi accedere con la nuova password.');
+}catch(e){say('Nuova password: '+e.message)}}
+function showRecovery(){
+ el('resetPanel').hidden=false;
+ el('email').hidden=true;el('password').hidden=true;
+ el('login').hidden=true;el('signup').hidden=true;el('forgot').hidden=true;
+ el('auth').querySelector('h3').textContent='Imposta nuova password';
+ say('Recupero verificato. Scegli una nuova password e premi Salva.');
+}
+function showNormalLogin(){
+ el('email').hidden=false;el('password').hidden=false;
+ el('login').hidden=false;el('signup').hidden=false;el('forgot').hidden=false;
+ el('auth').querySelector('h3').textContent='Accesso privato';
+}
+async function inspectRecovery(){
+ const hash=new URLSearchParams(location.hash.replace(/^#/,'')),query=new URLSearchParams(location.search);
+ const type=hash.get('type')||query.get('type');
+ const access=hash.get('access_token')||query.get('access_token');
+ const error=hash.get('error_description')||query.get('error_description')||hash.get('error')||query.get('error');
+ if(error){say('Collegamento non valido: '+error+'. Richiedi una nuova email di recupero.');history.replaceState(null,'',location.pathname);return}
+ if(access&&(type==='recovery'||!type)){
+   recoveryAccess=access;showRecovery();return;
+ }
+ const tokenHash=query.get('token_hash')||hash.get('token_hash');
+ if(tokenHash&&type==='recovery'){
+   try{
+     const r=await call('/auth/v1/verify',{method:'POST',headers:head(null,true),body:JSON.stringify({token_hash:tokenHash,type:'recovery'})});
+     const data=await r.json();if(!data.access_token)throw Error('Nessun codice di accesso restituito');
+     recoveryAccess=data.access_token;
+     history.replaceState(null,'',location.pathname);
+     showRecovery();return;
+   }catch(e){say('Verifica del recupero fallita: '+e.message+'. Richiedi un nuovo messaggio.');return}
+ }
+ if(type==='recovery'||query.has('code')){
+   say('Il collegamento è arrivato a BirdCam, ma senza una sessione di recupero utilizzabile. Richiedi un nuovo messaggio; se il problema continua, segnala che compare questa scritta.');
+ }else if(location.hash||location.search){
+   say('BirdCam aperta, ma non è stato trovato un codice di recupero. Richiedi una nuova email e apri il link originale.');
+ }
+}
+inspectRecovery();
 el('forgot').onclick=forgotPassword;el('savePassword').onclick=resetPassword;
 el('login').onclick=()=>auth(false);el('signup').onclick=()=>auth(true);el('upload').onclick=upload;el('refresh').onclick=gallery;el('logout').onclick=()=>{session=null;el('cloud').hidden=true;el('logout').hidden=true;el('login').hidden=el('signup').hidden=false;el('gallery').replaceChildren();say('Disconnesso')};
 })();
