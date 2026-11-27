@@ -3,7 +3,7 @@
 <title>BirdCam · Test cloud Pixel</title>
 <style>body{font:16px system-ui;background:#0b1e17;color:#e9f3ea;margin:0;padding:16px}main{max-width:700px;margin:auto}section{background:#183226;padding:16px;border-radius:12px;margin:14px 0}button,input{font:inherit;padding:11px;border-radius:8px;margin:4px 0}button{background:#b4e9ad;color:#10261a;border:0}input{max-width:95%}input[type=email],input[type=password]{display:block;width:95%}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.tile{background:#0a2419;padding:7px;border-radius:8px}.tile img{width:100%;aspect-ratio:4/3;object-fit:cover}.tile button{font-size:13px;padding:8px}.muted{color:#c2d1c6;font-size:14px}.status{white-space:pre-wrap;overflow-wrap:anywhere}</style></head>
 <body><main><h2>🐦 BirdCam · Test cloud dal Pixel</h2><p class="muted">Pagina separata dalla fototrappola dell'iPad. Usa la fotocamera o scegli un JPEG. Non cambia l'app in funzione.</p>
-<section id="auth"><h3>Accesso privato</h3><input id="email" type="email" autocomplete="email" placeholder="Email"><input id="password" type="password" autocomplete="current-password" placeholder="Password"><button id="login">Accedi</button> <button id="signup">Crea account</button> <button id="forgot">Password dimenticata?</button><div id="otpPanel" hidden><p>Se hai ricevuto un codice di recupero via email, inseriscilo qui. Non serve aprire alcun collegamento.</p><input id="recoveryCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="Codice ricevuto via email"><button id="verifyCode">Verifica codice</button></div> <button id="logout" hidden>Esci</button><div id="resetPanel" hidden><p>Imposta una nuova password dopo aver aperto il collegamento ricevuto via email.</p><input id="newPassword" type="password" autocomplete="new-password" placeholder="Nuova password (almeno 8 caratteri)"><button id="savePassword">Salva nuova password</button></div><p class="muted">La registrazione può richiedere conferma via email.</p></section>
+<section id="auth"><h3>Accesso privato</h3><input id="email" type="email" autocomplete="email" placeholder="Email"><input id="password" type="password" autocomplete="current-password" placeholder="Password"><label style="display:flex;align-items:center;gap:8px;margin:10px 0;max-width:100%"><input id="keepLogged" type="checkbox" style="width:18px;height:18px"> Rimani collegato su questo dispositivo</label><button id="login">Accedi</button> <button id="signup">Crea account</button> <button id="forgot">Password dimenticata?</button><div id="otpPanel" hidden><p>Se hai ricevuto un codice di recupero via email, inseriscilo qui. Non serve aprire alcun collegamento.</p><input id="recoveryCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="Codice ricevuto via email"><button id="verifyCode">Verifica codice</button></div> <button id="logout" hidden>Esci</button><div id="resetPanel" hidden><p>Imposta una nuova password dopo aver aperto il collegamento ricevuto via email.</p><input id="newPassword" type="password" autocomplete="new-password" placeholder="Nuova password (almeno 8 caratteri)"><button id="savePassword">Salva nuova password</button></div><p class="muted">La registrazione può richiedere conferma via email.</p></section>
 <section id="cloud" hidden><h3>Prova invio fotografia</h3><input id="photo" type="file" accept="image/jpeg,image/*" capture="environment"><p><button id="upload">Invia fotografia di prova</button> <button id="refresh">Aggiorna galleria</button></p><p id="usage" class="muted"></p><p class="muted">Pulizia: al raggiungimento dell'80% della quota di riferimento (1 GiB), elimina le foto cloud più vecchie non preferite fino al 70%. La pulizia viene controllata dopo gli invii da questa pagina. Le foto locali non vengono toccate.</p><div class="grid" id="gallery"></div></section>
 <section><h3>Simulazione pulizia (senza cancellare foto reali)</h3><p class="muted">Scenario fittizio: 850 MiB occupati su 1 GiB, una foto preferita. Premi per verificare l'ordine di eliminazione e la soglia del 70%. Non viene effettuata alcuna richiesta di cancellazione.</p><button id="simulate">Simula pulizia 80% → 70%</button><div id="simulation" class="status" aria-live="polite"></div></section>
 <section><div class="status" id="status" role="status">Accedi per iniziare il test.</div></section></main>
@@ -12,14 +12,56 @@
 const base='https://dsvcawulshkzlalpkbnf.supabase.co',key='sb_publishable_p7cYRIZCdOOTrf2KhkYH8g_cqYK-aIu',bucket='birdcam-photos',quota=1024*1024*1024;
 const el=id=>document.getElementById(id),say=s=>el('status').textContent=s;
 let session=null;
+const sessionKey='birdcam_pixel_cloud_session_v1';
+function rememberSession(){
+  if(session && el('keepLogged').checked){
+    try{localStorage.setItem(sessionKey,JSON.stringify(session));}catch(e){say('Accesso riuscito, ma il browser non permette di ricordare la sessione.');}
+  }else localStorage.removeItem(sessionKey);
+}
+function connectSession(){
+  if(window.BirdCamPush)window.BirdCamPush.setAuth(async()=>({token:await token(),userId:session.user.id}));
+  el('cloud').hidden=false;el('logout').hidden=false;
+  el('login').hidden=el('signup').hidden=true;
+  el('keepLogged').parentElement.hidden=true;
+}
+function disconnectSession(){
+  session=null;localStorage.removeItem(sessionKey);
+  if(window.BirdCamPush)window.BirdCamPush.setAuth(null);
+  el('cloud').hidden=true;el('logout').hidden=true;
+  el('login').hidden=el('signup').hidden=false;
+  el('keepLogged').parentElement.hidden=false;
+  el('gallery').replaceChildren();
+}
+async function restoreSession(){
+  const stored=localStorage.getItem(sessionKey);
+  if(!stored)return;
+  if(new URLSearchParams(location.hash.slice(1)).has('type') || new URLSearchParams(location.search).has('token_hash'))return;
+  try{
+    const old=JSON.parse(stored);
+    if(!old?.refresh_token || !old?.user?.id)throw Error('Sessione incompleta');
+    session=old;
+    el('keepLogged').checked=true;
+    // Refresh on every restart: also detects expired/revoked credentials.
+    const r=await call('/auth/v1/token?grant_type=refresh_token',{
+      method:'POST',headers:head(null,true),body:JSON.stringify({refresh_token:old.refresh_token})
+    });
+    const d=await r.json();
+    session={...d,expires_at:Date.now()+d.expires_in*1000};
+    rememberSession();connectSession();
+    say('Accesso ripristinato automaticamente.');await gallery();
+  }catch(e){
+    disconnectSession();
+    say('La sessione salvata è scaduta. Accedi di nuovo.');
+  }
+}
 function head(token,json=false){const h={apikey:key,Authorization:'Bearer '+(token||key)};if(json)h['Content-Type']='application/json';return h}
 async function call(path,opts={}){const r=await fetch(base+path,opts);if(!r.ok){let message='HTTP '+r.status;try{const o=await r.json();message=o.msg||o.message||o.error_description||o.error||message}catch{}throw Error(message)}return r}
 async function token(){if(!session)throw Error('Effettua l’accesso');if(Date.now()<session.expires_at-60000)return session.access_token;
-const r=await call('/auth/v1/token?grant_type=refresh_token',{method:'POST',headers:head(null,true),body:JSON.stringify({refresh_token:session.refresh_token})});const d=await r.json();session={...d,expires_at:Date.now()+d.expires_in*1000};return session.access_token}
+const r=await call('/auth/v1/token?grant_type=refresh_token',{method:'POST',headers:head(null,true),body:JSON.stringify({refresh_token:session.refresh_token})});const d=await r.json();session={...d,expires_at:Date.now()+d.expires_in*1000};rememberSession();return session.access_token}
 async function auth(signup){try{const email=el('email').value.trim(),password=el('password').value;if(!email||!password)throw Error('Inserisci email e password');say('Connessione...');const path=signup?('/auth/v1/signup?redirect_to='+encodeURIComponent(location.origin+'/Birdcam/cloud-test.html')):'/auth/v1/token?grant_type=password';
 const r=await call(path,{method:'POST',headers:head(null,true),body:JSON.stringify({email,password})});const d=await r.json();
 if(!d.access_token){say('Account creato: conferma la mail e poi premi Accedi.');return}
-session={...d,expires_at:Date.now()+d.expires_in*1000};if(window.BirdCamPush)window.BirdCamPush.setAuth(async()=>({token:await token(),userId:session.user.id}));el('cloud').hidden=false;el('logout').hidden=false;el('login').hidden=el('signup').hidden=true;say('Accesso riuscito. Puoi scattare una foto col Pixel.');await gallery()}catch(e){say('Accesso: '+e.message)}}
+session={...d,expires_at:Date.now()+d.expires_in*1000};rememberSession();connectSession();el('password').value='';say('Accesso riuscito. Puoi scattare una foto col Pixel.');await gallery()}catch(e){say('Accesso: '+e.message)}}
 async function list(){const t=await token(),all=[];let offset=0;while(true){const r=await call('/storage/v1/object/list/'+bucket,{method:'POST',headers:head(t,true),body:JSON.stringify({prefix:session.user.id,limit:100,offset,sortBy:{column:'created_at',order:'asc'}})});const a=await r.json();all.push(...a.filter(x=>x.name&&x.name.endsWith('.jpg')));if(a.length<100)break;offset+=100;if(offset>10000)throw Error('Troppe foto: pulizia sospesa per sicurezza')}
 return all.map(x=>({...x,path:session.user.id+'/'+x.name,size:Number(x.metadata?.size||0)}))}
 async function favourites(){const t=await token();const r=await call('/rest/v1/birdcam_favorites?select=object_name&user_id=eq.'+encodeURIComponent(session.user.id),{headers:head(t)});return new Set((await r.json()).map(x=>x.object_name))}
@@ -75,13 +117,13 @@ async function resetPassword(){try{
 function showRecovery(){
  el('resetPanel').hidden=false;
  el('email').hidden=true;el('password').hidden=true;
- el('login').hidden=true;el('signup').hidden=true;el('forgot').hidden=true;
+ el('login').hidden=true;el('signup').hidden=true;el('forgot').hidden=true;el('keepLogged').parentElement.hidden=true;
  el('auth').querySelector('h3').textContent='Imposta nuova password';
  say('Recupero verificato. Scegli una nuova password e premi Salva.');
 }
 function showNormalLogin(){
  el('email').hidden=false;el('password').hidden=false;
- el('login').hidden=false;el('signup').hidden=false;el('forgot').hidden=false;
+ el('login').hidden=false;el('signup').hidden=false;el('forgot').hidden=false;el('keepLogged').parentElement.hidden=false;
  el('auth').querySelector('h3').textContent='Accesso privato';
 }
 async function inspectRecovery(){
@@ -110,7 +152,8 @@ async function inspectRecovery(){
  }
 }
 inspectRecovery();
+restoreSession();
 el('forgot').onclick=forgotPassword;el('verifyCode').onclick=verifyRecoveryCode;el('savePassword').onclick=resetPassword;
-el('login').onclick=()=>auth(false);el('signup').onclick=()=>auth(true);el('upload').onclick=upload;el('refresh').onclick=gallery;el('logout').onclick=()=>{session=null;if(window.BirdCamPush)window.BirdCamPush.setAuth(null);el('cloud').hidden=true;el('logout').hidden=true;el('login').hidden=el('signup').hidden=false;el('gallery').replaceChildren();say('Disconnesso')};
+el('login').onclick=()=>auth(false);el('signup').onclick=()=>auth(true);el('upload').onclick=upload;el('refresh').onclick=gallery;el('logout').onclick=()=>{disconnectSession();say('Disconnesso. La sessione memorizzata è stata eliminata.');};
 })();
 </script><script src="birdcam-push.js?v=2"></script></body></html>
