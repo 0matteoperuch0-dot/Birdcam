@@ -14,7 +14,7 @@
   const root = document.createElement("section");
   root.className = "panel";
   root.style.marginTop = "16px";
-  root.innerHTML = '<h2>☁️ Condivisione remota (beta)</h2><p class="help">Test: le foto locali non vengono cancellate; nuovi JPEG copiati nel cloud ogni 15 secondi quando Safari è attivo. Pulizia automatica e notifiche push non ancora attive.</p><div id="cloudAuth"><input id="cloudEmail" type="email" placeholder="Email" style="width:100%;margin-bottom:8px;padding:10px"><input id="cloudPassword" type="password" placeholder="Password" style="width:100%;margin-bottom:8px;padding:10px"><div class="actions"><button id="cloudLogin">Accedi</button><button id="cloudSignup">Crea account</button><button id="cloudLogout" style="display:none">Esci</button><button id="cloudSync">Invia foto in attesa</button></div></div><p id="cloudStatus" class="help" role="status"></p><div class="gallery" id="cloudGallery"></div><div class="actions"><button id="cloudRefresh">Aggiorna galleria online</button></div>';
+  root.innerHTML = '<h2>☁️ Condivisione remota (beta)</h2><p class="help">Test: le foto locali non vengono cancellate; nuovi JPEG copiati nel cloud ogni 15 secondi quando Safari è attivo. Pulizia automatica e notifiche push non ancora attive.</p><div id="cloudAuth"><input id="cloudEmail" type="email" placeholder="Email" style="width:100%;margin-bottom:8px;padding:10px"><input id="cloudPassword" type="password" placeholder="Password" style="width:100%;margin-bottom:8px;padding:10px"><label id="cloudRememberLabel" style="display:flex;gap:8px;align-items:center;margin:8px 0 12px"><input type="checkbox" id="cloudRemember" style="width:18px;height:18px"> Rimani collegato su questo dispositivo</label><div class="actions"><button id="cloudLogin">Accedi</button><button id="cloudSignup">Crea account</button><button id="cloudLogout" style="display:none">Esci</button><button id="cloudSync">Invia foto in attesa</button></div></div><p id="cloudStatus" class="help" role="status"></p><div class="gallery" id="cloudGallery"></div><div class="actions"><button id="cloudRefresh">Aggiorna galleria online</button></div>';
   const main = document.querySelector("main.wrap");
   const footer = main.querySelector(".footer");
   main.insertBefore(root, footer);
@@ -37,12 +37,13 @@
   function saved() { try { return JSON.parse(localStorage.getItem(doneKey + "_" + session.user.id) || "{}"); } catch (_) { return {}; } }
   function updateSession(s) {
     session = s;
-    if (s) localStorage.setItem(stateKey, JSON.stringify(s)); else localStorage.removeItem(stateKey);
+    if (s && el("cloudRemember").checked) localStorage.setItem(stateKey, JSON.stringify(s)); else localStorage.removeItem(stateKey);
     el("cloudLogin").style.display = s ? "none" : "";
     el("cloudSignup").style.display = s ? "none" : "";
     el("cloudLogout").style.display = s ? "" : "none";
     el("cloudEmail").style.display = s ? "none" : "";
     el("cloudPassword").style.display = s ? "none" : "";
+    el("cloudRememberLabel").style.display = s ? "none" : "";
   }
   async function ensureToken() {
     if (!session) throw Error("Accedi prima di sincronizzare.");
@@ -281,8 +282,19 @@
   if (!enabled) {
     status("Funzione in preparazione: Supabase dedicato non ancora configurato. Nessun dato viene trasmesso.");
   } else {
-    try { const old = JSON.parse(localStorage.getItem(stateKey) || "null"); if (old) updateSession(old); } catch (_) {}
-    if (session) { sync(); gallery(); }
+    try {
+      const old = JSON.parse(localStorage.getItem(stateKey) || "null");
+      if (old && old.refresh_token && old.user && old.user.id) {
+        el("cloudRemember").checked = true;
+        updateSession(old);
+      } else localStorage.removeItem(stateKey);
+    } catch (_) { localStorage.removeItem(stateKey); }
+    if (session) {
+      ensureToken().then(() => { sync(); gallery(); }).catch(() => {
+        updateSession(null);
+        status("Sessione scaduta. Accedi nuovamente.");
+      });
+    }
     timer = setInterval(sync, 15000);
     window.addEventListener("online", sync);
   }
